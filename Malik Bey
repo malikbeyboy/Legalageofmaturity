@@ -1,0 +1,132 @@
+// App.js
+import React from 'react';
+import { BrowserRouter as Router, Route, Switch } from 'react-router-dom';
+import Registration from './components/Registration';
+import Login from './components/Login';
+import Dashboard from './components/Dashboard';
+import DeclarationForm from './components/DeclarationForm';
+
+function App() {
+  return (
+    <Router>
+      <Switch>
+        <Route path="/register" component={Registration} />
+        <Route path="/login" component={Login} />
+        <Route path="/dashboard" component={Dashboard} />
+        <Route path="/declaration" component={DeclarationForm} />
+      </Switch>
+    </Router>
+  );
+}
+
+export default App;
+const express = require('express');
+const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const bodyParser = require('body-parser');
+const fileUpload = require('express-fileupload');
+const pdf = require('pdfkit');
+const crypto = require('crypto');
+const Web3 = require('web3');
+const Stripe = require('stripe');
+
+// Initialize app
+const app = express();
+app.use(bodyParser.json());
+app.use(fileUpload());
+
+// Connect to database
+mongoose.connect('mongodb://localhost:27017/iclaimmyself', { useNewUrlParser: true, useUnifiedTopology: true });
+
+// User schema and model
+const userSchema = new mongoose.Schema({
+    username: String,
+    email: String,
+    password: String,
+    membership: Boolean,
+});
+const User = mongoose.model('User', userSchema);
+
+// Middleware for checking authentication
+const auth = (req, res, next) => {
+    const token = req.header('Authorization').replace('Bearer ', '');
+    const data = jwt.verify(token, 'secret');
+    User.findOne({ _id: data._id, 'tokens.token': token }, (err, user) => {
+        if (err || !user) {
+            return res.status(401).send({ error: 'Not authorized' });
+        }
+        req.user = user;
+        next();
+    });
+};
+
+// Registration endpoint
+app.post('/register', async (req, res) => {
+    const user = new User(req.body);
+    user.password = await bcrypt.hash(user.password, 8);
+    await user.save();
+    const token = jwt.sign({ _id: user._id }, 'secret');
+    res.status(201).send({ user, token });
+});
+
+// Declaration generation endpoint
+app.post('/generate-declaration', auth, (req, res) => {
+    const { name, birthdate, state } = req.body;
+    const doc = new pdf();
+    const filePath = `./declarations/${req.user.username}_declaration.pdf`;
+
+    doc.pipe(fs.createWriteStream(filePath));
+    doc.text(`Declaration of ${name}`, { align: 'center' });
+    doc.text(`Birthdate: ${birthdate}`);
+    doc.text(`State: ${state}`);
+    doc.text(`... other verbiage ...`);
+    doc.end();
+
+    res.send({ message: 'Declaration generated', filePath });
+});
+
+// Certificate generation endpoint
+app.post('/generate-certificate', auth, (req, res) => {
+    const file = req.files.file;
+    const hash = crypto.createHash('sha256').update(file.data).digest('hex');
+    const certificateId = new mongoose.Types.ObjectId();
+
+    // Save certificate details to database
+    const certificate = new Certificate({
+        userId: req.user._id,
+        description: req.body.description,
+        certificateId,
+        digitalFingerprint: hash,
+        blockchainId: '', // To be updated after recording on blockchain
+    });
+    certificate.save();
+
+    // Interact with blockchain to record certificate
+    const web3 = new Web3('https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID');
+    // Add your blockchain interaction code here
+
+    res.send({ message: 'Certificate generated', certificateId });
+});
+
+// Start server
+app.listen(3000, () => {
+    console.log('Server is running on port 3000');
+});
+const stripe = Stripe('YOUR_STRIPE_SECRET_KEY');
+
+// Payment endpoint
+app.post('/payment', auth, async (req, res) => {
+    const { token, amount } = req.body;
+    try {
+        const charge = await stripe.charges.create({
+            amount,
+            currency: 'usd',
+            source: token,
+            description: 'Membership or Certificate Payment'
+        });
+        res.send({ success: true, charge });
+    } catch (error) {
+        res.status(500).send({ error: error.message });
+    }
+});
